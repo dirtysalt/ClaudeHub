@@ -1526,7 +1526,7 @@ private struct TabChip: View {
     /// Set when the tab wanted a saved account and had to start without it.
     let fellBackFrom: String?
     /// Set when the tab could not move to the new account yet, and why.
-    let pending: (account: String, waitingOnPaste: Bool)?
+    let pending: (account: String, hold: TerminalManager.SwitchHold)?
     /// Set when this tab's account has run out, in the session's own words.
     let limitNotice: String?
     let activate: () -> Void
@@ -1645,17 +1645,7 @@ private struct TabChip: View {
                     .padding(.horizontal, 4)
                     .padding(.vertical, 1)
                     .background(Color.orange.opacity(0.20), in: Capsule())
-                    .help(pending.waitingOnPaste
-                          ? """
-                            Waiting: the prompt holds content only this session \
-                            has — an image from Claude in Chrome, or a paste from \
-                            before ClaudeHub was watching this tab. Send or clear \
-                            it and this tab moves to \(pending.account).
-                            """
-                          : """
-                            Busy right now — this conversation moves to \
-                            \(pending.account) and resumes as soon as it is done.
-                            """)
+                    .help(Self.waitingHelp(pending.hold, account: pending.account))
             } else if let fellBackFrom {
                 Text("signed in")
                     .font(.system(size: 9, weight: .semibold))
@@ -1680,6 +1670,31 @@ private struct TabChip: View {
                           ? "Running as \(account) — not the account you are on now"
                           : "Will start as \(account)")
             }
+        }
+    }
+
+    /// Why a tab is still on its old account, and what lets it move.
+    private static func waitingHelp(_ hold: TerminalManager.SwitchHold, account: String) -> String {
+        switch hold {
+        case .attachment:
+            return """
+                Waiting: the prompt holds content only this session \
+                has — an image from Claude in Chrome, or a paste from \
+                before ClaudeHub was watching this tab. Send or clear \
+                it and this tab moves to \(account).
+                """
+        case .busy:
+            return """
+                Busy right now — this conversation moves to \
+                \(account) and resumes as soon as it is done.
+                """
+        case .background(let work):
+            return """
+                Still running in the background: \(work.summary). \
+                Restarting the session now would end them, so it stays on \
+                its account until they are done, then moves to \(account). \
+                A server it started keeps it here until you stop it (/tasks).
+                """
         }
     }
 }

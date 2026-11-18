@@ -52,18 +52,31 @@ final class TerminalManager: NSObject, ObservableObject {
     private static let imageWait: TimeInterval = 5
 
     /// Why a tab has not moved to the new account yet.
-    private enum SwitchHold {
+    enum SwitchHold: Equatable {
         /// Mid-answer, or waiting on a permission prompt.
         case busy
         /// The prompt holds something neither the screen nor `PasteMemory` can
         /// give back — an image from Claude in Chrome, say, or a paste from
         /// before this app was watching.
         case attachment
+        /// The answer is done, but agents or commands it started are still
+        /// running inside the session's process.
+        case background(BackgroundWork)
     }
 
     /// Tabs that could not move when the account changed: they move as soon as
     /// the reason is gone. Nothing is interrupted, and nothing is lost.
     private var deferredSwitches: [String: (tab: TerminalTab, account: String, hold: SwitchHold)] = [:]
+    /// Per conversation: the agents its transcript says are out — see
+    /// `BackgroundWork`.
+    private var agentLedgers: [String: AgentLedger] = [:]
+    /// What each conversation had running behind its prompt at the last look.
+    private var backgroundWork: [String: BackgroundWork] = [:]
+    /// When that last went from something to nothing.
+    private var backgroundEndedAt: [String: Date] = [:]
+    /// An agent that reports back hands its session a new turn, and the
+    /// screen takes a moment to show it: a tab is not moved in that moment.
+    private static let backgroundSettle: TimeInterval = 8
     /// Sessions that answered while you were elsewhere. Cleared by looking at
     /// them, which is the only thing that should clear it.
     @Published private(set) var unread: Set<String> = []
@@ -479,6 +492,11 @@ final class TerminalManager: NSObject, ObservableObject {
             fellBack[tab.id] = wanted
         }
         let envArray = env.map { "\($0.key)=\($0.value)" }
+        // Before the process starts, so nothing it writes is missed.
+        forgetBackgroundWork(of: tab.id)
+        if tab.isConversation, let sessionID = tab.sessionID {
+            agentLedgers[tab.id] = AgentLedger(sessionID: sessionID)
+        }
 
         switch tab.kind {
         case .resume(let sessionID):
@@ -530,17 +548,23 @@ final class TerminalManager: NSObject, ObservableObject {
     func launchDate(of tabID: String) -> Date? { launchedAt[tabID] }
 
     /// Whether Claude Code has already written a transcript for this session.
-    /// The project folder is derived from the cwd by a scheme we would rather
-    /// not reimplement, so this just looks for the file across all of them.
     private static func transcriptExists(_ sessionID: String) -> Bool {
+        transcriptURL(for: sessionID) != nil
+    }
+
+    /// Where Claude Code writes this session's transcript, once it has started
+    /// one. The project folder is derived from the cwd by a scheme we would
+    /// rather not reimplement, so this just looks for the file across all of
+    /// them.
+    static func transcriptURL(for sessionID: String) -> URL? {
         let fm = FileManager.default
         let root = fm.homeDirectoryForCurrentUser.appendingPathComponent(".claude/projects")
         guard let dirs = try? fm.contentsOfDirectory(at: root, includingPropertiesForKeys: nil) else {
-            return false
+            return nil
         }
-        return dirs.contains {
-            fm.fileExists(atPath: $0.appendingPathComponent("\(sessionID).jsonl").path)
-        }
+        return dirs.lazy
+            .map { $0.appendingPathComponent("\(sessionID).jsonl") }
+            .first { fm.fileExists(atPath: $0.path) }
     }
 
     /// A login shell gives `claude` the same PATH the user's terminal has.
@@ -593,8 +617,15 @@ final class TerminalManager: NSObject, ObservableObject {
         launchedProfile[tab.id] = nil
         fellBack[tab.id] = nil
         launchedAt[tab.id] = nil
+        forgetBackgroundWork(of: tab.id)
         deadTabs.remove(tab.id)
         generation += 1
+    }
+
+    private func forgetBackgroundWork(of tabID: String) {
+        agentLedgers[tabID] = nil
+        backgroundWork[tabID] = nil
+        backgroundEndedAt[tabID] = nil
     }
 
     /// Moves every open conversation onto the account that is active now.
@@ -637,15 +668,36 @@ final class TerminalManager: NSObject, ObservableObject {
             return .attachment
         }
         switch activity(of: tab.id) {
-        case .idle, .finished, .stopped, .dead: return nil
+        case .idle, .finished, .stopped, .dead, .background: break
         case .busy, .needsInput: return .busy
         }
+        // A quiet prompt is not enough: agents and commands the session left
+        // running end with its process. Asked afresh, since the last look may
+        // be a few seconds old.
+        let work = lookForBackgroundWork(tab.id)
+        if !work.isEmpty { return .background(work) }
+        if let ended = backgroundEndedAt[tab.id],
+           Date().timeIntervalSince(ended) < Self.backgroundSettle { return .busy }
+        return nil
+    }
+
+    /// What a conversation has running behind its prompt right now.
+    private func lookForBackgroundWork(_ tabID: String) -> BackgroundWork {
+        guard let view = terminals[tabID], !deadTabs.contains(tabID),
+              let ledger = agentLedgers[tabID] else { return BackgroundWork() }
+        // The shell `claude` was exec'd from: the pid is the session's own.
+        let shells = view.process.running ? SessionShells.count(under: view.process.shellPid) : 0
+        let work = BackgroundWork(agents: ledger.agentsRunning(shellsRunning: shells > 0),
+                                  shells: shells)
+        if work.isEmpty, backgroundWork[tabID]?.isEmpty == false { backgroundEndedAt[tabID] = Date() }
+        backgroundWork[tabID] = work
+        return work
     }
 
     /// The account a tab will move to once it can, and why it has not yet.
-    func pendingSwitch(of tabID: String) -> (account: String, waitingOnPaste: Bool)? {
+    func pendingSwitch(of tabID: String) -> (account: String, hold: SwitchHold)? {
         guard let pending = deferredSwitches[tabID] else { return nil }
-        return (pending.account, pending.hold == .attachment)
+        return (pending.account, pending.hold)
     }
 
     /// Moves the tabs that were busy when the account changed, now that they
@@ -658,8 +710,12 @@ final class TerminalManager: NSObject, ObservableObject {
                 continue
             }
             // The same test that held it back, asked again: sent the paste, or
-            // finished the answer, and it can move.
-            guard hold(on: pending.tab) == nil else { continue }
+            // finished the answer, and it can move. Until then the tab says
+            // what it is waiting for now, which may not be what held it first.
+            if let hold = hold(on: pending.tab) {
+                if hold != pending.hold { deferredSwitches[id]?.hold = hold }
+                continue
+            }
             deferredSwitches[id] = nil
             relaunch(pending.tab)
         }
@@ -680,6 +736,7 @@ final class TerminalManager: NSObject, ObservableObject {
         finishedAt[tabID] = nil
         markRead(tabID)
         deferredSwitches[tabID] = nil
+        forgetBackgroundWork(of: tabID)
         deadTabs.remove(tabID)
         generation += 1
     }
@@ -770,11 +827,16 @@ final class TerminalManager: NSObject, ObservableObject {
             // One read, two questions asked of it.
             let screen = Self.visibleText(of: view)
             let cursor = cursorTabs.contains(id)
-            let state = cursor ? Self.classifyCursor(screen) : Self.classify(screen)
-            if state == .busy, activity[id] != .busy { busySince[id] = Date() }
+            var state = cursor ? Self.classifyCursor(screen) : Self.classify(screen)
+            // The prompt is back, but agents it sent off may still be at work:
+            // that session is not waiting for you yet.
+            if state == .idle, agentLedgers[id] != nil, lookForBackgroundWork(id).agents > 0 {
+                state = .background
+            }
+            if state.isWorking, activity[id]?.isWorking != true { busySince[id] = Date() }
 
             // The moment an answer lands: working a second ago, quiet now.
-            if activity[id] == .busy, state == .idle {
+            if activity[id]?.isWorking == true, state == .idle {
                 finishedAt[id] = Date()
                 let watched = visibleTabs.contains(id) && NSApp.isActive
                 if !watched { finished.append(id) }
@@ -793,7 +855,7 @@ final class TerminalManager: NSObject, ObservableObject {
             // It is read off the screen, and the screen keeps it long after the
             // window has reset, so it counts only while the reset it names is
             // still ahead and the session is not plainly working.
-            let notice = state == .busy || cursor ? nil : Self.limitNotice(in: screen)
+            let notice = state.isWorking || cursor ? nil : Self.limitNotice(in: screen)
             if limitNotices[id] != notice { limitNotices[id] = notice }
         }
         if next != activity { activity = next }

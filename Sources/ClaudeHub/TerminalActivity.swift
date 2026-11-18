@@ -5,6 +5,7 @@ enum TerminalActivity: Equatable {
     case stopped      // no terminal yet
     case idle         // running, waiting for you, and you have seen it
     case busy         // Claude is working ("esc to interrupt")
+    case background   // its turn is over, but agents it sent off are still working
     case finished     // answered while you were somewhere else, still unread
     case needsInput   // a permission prompt is waiting on an answer
     case dead         // the process exited
@@ -17,13 +18,18 @@ enum TerminalActivity: Equatable {
         case .stopped: return .secondary
         case .idle: return .green
         case .busy: return .orange
+        case .background: return .orange
         case .finished: return .blue
         case .needsInput: return .blue
         case .dead: return .secondary
         }
     }
 
-    var pulses: Bool { self == .busy || self == .needsInput }
+    var pulses: Bool { isWorking || self == .needsInput }
+
+    /// Work is going on that will end in an answer — whether or not the prompt
+    /// is back on screen.
+    var isWorking: Bool { self == .busy || self == .background }
 
     /// Unread answers earn a ring, so the two blues are never in doubt at 7pt.
     var isUnread: Bool { self == .finished }
@@ -33,6 +39,7 @@ enum TerminalActivity: Equatable {
         case .stopped: return "Not running"
         case .idle: return "Waiting for you"
         case .busy: return "Claude is working"
+        case .background: return "Background agents are still working"
         case .finished: return "Finished — you have not looked at it yet"
         case .needsInput: return "Waiting for your answer"
         case .dead: return "Session ended"
