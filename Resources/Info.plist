@@ -21,7 +21,7 @@
 	<key>LSMinimumSystemVersion</key>
 	<string>14.0</string>
 	<key>NSAppleEventsUsageDescription</key>
-	<string>ClaudeHub opens sessions in Terminal.app when you ask it to.</string>
+	<string>ClaudeHub opens sessions in iTerm2 or Terminal.app when you ask it to.</string>
 	<key>NSHighResolutionCapable</key>
 	<true/>
 	<key>NSPrincipalClass</key>

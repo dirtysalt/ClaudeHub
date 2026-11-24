@@ -21,6 +21,7 @@ struct ContentView: View {
     @State private var pendingDeletion: [ClaudeSession] = []
     @State private var deletionScope = ""
     @State private var deleteError: String?
+    @State private var iTermError: String?
     /// The chat whose name is being edited in the title bar, if any.
     @State private var renamingSessionID: String?
     @State private var renameDraft = ""
@@ -241,6 +242,14 @@ struct ContentView: View {
             Button("OK", role: .cancel) { deleteError = nil }
         } message: {
             Text(deleteError ?? "")
+        }
+        .alert("Could not open in iTerm2", isPresented: Binding(
+            get: { iTermError != nil },
+            set: { if !$0 { iTermError = nil } }
+        )) {
+            Button("OK", role: .cancel) { iTermError = nil }
+        } message: {
+            Text(iTermError ?? "")
         }
         .alert("Could not rename", isPresented: Binding(
             get: { renameError != nil },
@@ -1028,6 +1037,9 @@ struct ContentView: View {
         if CursorAgent.editorURL != nil {
             Button("Open in Cursor") { CursorAgent.openInEditor(session.cwd) }
         }
+        if !session.isCursor, ITerm2.isInstalled {
+            Button("Open in iTerm2") { openInITerm2(session) }
+        }
         Button("Open in Terminal.app") { openInTerminalApp(session) }
         Button("Reveal Folder in Finder") {
             NSWorkspace.shared.selectFile(nil, inFileViewerRootedAtPath: session.cwd)
@@ -1201,6 +1213,18 @@ struct ContentView: View {
         NSWorkspace.shared.open([URL(fileURLWithPath: path)],
                                 withApplicationAt: application,
                                 configuration: NSWorkspace.OpenConfiguration())
+    }
+
+    /// Switches to the iTerm2 session running this conversation, or resumes it
+    /// in a new iTerm2 tab.
+    private func openInITerm2(_ session: ClaudeSession) {
+        // Two `claude` processes on one conversation write over each other's
+        // transcript, so a conversation running here stays here.
+        if let tab = tabs.tab(forSessionID: session.id), terminalManager.isRunning(tab.id) {
+            iTermError = "“\(session.title)” is running in a ClaudeHub tab. Close that tab first, then open it in iTerm2."
+            return
+        }
+        ITerm2.open(session) { error in iTermError = error }
     }
 
     /// Opens the session in Terminal.app by handing it a `.command` file.
