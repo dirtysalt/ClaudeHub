@@ -18,6 +18,8 @@ extension Notification.Name {
     /// A notification banner was clicked: bring that session forward.
     static let focusTab = Notification.Name("ClaudeHub.focusTab")
     static let toggleSidebar = Notification.Name("ClaudeHub.toggleSidebar")
+    /// ⌘P: search the open tabs and jump to one.
+    static let showQuickSwitcher = Notification.Name("ClaudeHub.showQuickSwitcher")
 }
 
 final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCenterDelegate {
@@ -69,6 +71,12 @@ struct ClaudeHubApp: App {
     @StateObject private var usage = UsageStore()
     @StateObject private var git = GitStore()
     @StateObject private var cursorUsage = CursorUsageStore()
+    @AppStorage(AppAppearance.key) private var appearance = AppAppearance.system.rawValue
+
+    init() {
+        AppAppearance.apply(UserDefaults.standard.string(forKey: AppAppearance.key)
+                            ?? AppAppearance.system.rawValue)
+    }
 
     var body: some Scene {
         WindowGroup(id: "main") {
@@ -140,6 +148,13 @@ struct ClaudeHubApp: App {
                 Button("Actual Size") { TerminalManager.shared.resetFontSize() }
                     .keyboardShortcut("0", modifiers: .command)
                 Divider()
+                Picker("Appearance", selection: $appearance) {
+                    Text("System").tag(AppAppearance.system.rawValue)
+                    Text("Light").tag(AppAppearance.light.rawValue)
+                    Text("Dark").tag(AppAppearance.dark.rawValue)
+                }
+                .onChange(of: appearance) { _, value in AppAppearance.apply(value) }
+                Divider()
             }
             CommandMenu("Claude") {
                 Button("Usage & Limits") { ClaudeCommands.send("/usage", tabs: tabs) }
@@ -163,6 +178,24 @@ struct ClaudeHubApp: App {
                 AccountItems(accounts: accounts, tabs: tabs, usage: usage)
             }
             CommandMenu("Tabs") {
+                Button("Quick Switch…") {
+                    NotificationCenter.default.post(name: .showQuickSwitcher, object: nil)
+                }
+                .keyboardShortcut("p", modifiers: .command)
+                .disabled(tabs.tabs.isEmpty)
+                Button("Previous Tab") { tabs.activateAdjacent(-1) }
+                    .keyboardShortcut(.leftArrow, modifiers: .command)
+                    .disabled(tabs.tabs.count < 2)
+                Button("Next Tab") { tabs.activateAdjacent(1) }
+                    .keyboardShortcut(.rightArrow, modifiers: .command)
+                    .disabled(tabs.tabs.count < 2)
+                Button("Previous Tab (iTerm)") { tabs.activateAdjacent(-1) }
+                    .keyboardShortcut("[", modifiers: [.command, .shift])
+                    .disabled(tabs.tabs.count < 2)
+                Button("Next Tab (iTerm)") { tabs.activateAdjacent(1) }
+                    .keyboardShortcut("]", modifiers: [.command, .shift])
+                    .disabled(tabs.tabs.count < 2)
+                Divider()
                 ForEach(1..<10, id: \.self) { number in
                     Button("Tab \(number)") { tabs.activate(index: number - 1) }
                         .keyboardShortcut(KeyEquivalent(Character("\(number)")), modifiers: .command)
@@ -216,5 +249,26 @@ private struct NewItemCommands: View {
 
         Button("Refresh Sessions") { store.refresh() }
             .keyboardShortcut("r", modifiers: .command)
+    }
+}
+
+/// View → Appearance: follow macOS, or pin the app (and its terminals) to
+/// light or dark. Terminals re-theme through TerminalManager's
+/// effectiveAppearance observer.
+enum AppAppearance: String {
+    case system, light, dark
+    static let key = "appAppearance"
+
+    static func apply(_ raw: String) {
+        let appearance: NSAppearance? = switch AppAppearance(rawValue: raw) ?? .system {
+        case .system: nil
+        case .light: NSAppearance(named: .aqua)
+        case .dark: NSAppearance(named: .darkAqua)
+        }
+        if let app = NSApp {
+            app.appearance = appearance
+        } else {
+            DispatchQueue.main.async { NSApp.appearance = appearance }
+        }
     }
 }

@@ -15,6 +15,7 @@ struct ContentView: View {
     @State private var selectedSessionIDs: Set<String> = []
     @State private var searchText = ""
     @State private var showMCPManager = false
+    @State private var showQuickSwitcher = false
     @State private var showHiddenSessions = false
     @State private var columnVisibility: NavigationSplitViewVisibility = .all
     @State private var pendingDeletion: [ClaudeSession] = []
@@ -294,12 +295,6 @@ struct ContentView: View {
             tabs.adoptSessionTitles(from: projects)
             git.track(projects: projects.map(\.path))
         }
-        .onChange(of: selectedSessionIDs) { _, ids in
-            // Gathering several chats is picking what to act on, not asking to
-            // open each one on the way.
-            guard ids.count == 1, let id = ids.first, let session = session(withID: id) else { return }
-            tabs.openSession(session)
-        }
         .onChange(of: tabs.activeTabID) { previous, _ in
             // Keep the sidebar in sync with the active tab (nil for fresh-session
             // tabs) — but never from inside the update that brought us here.
@@ -334,6 +329,10 @@ struct ContentView: View {
         }
         .onReceive(NotificationCenter.default.publisher(for: .showMCPManager)) { _ in
             showMCPManager = true
+        }
+        .onReceive(NotificationCenter.default.publisher(for: .showQuickSwitcher)) { _ in
+            guard !tabs.tabs.isEmpty else { return }
+            showQuickSwitcher = true
         }
         .onReceive(NotificationCenter.default.publisher(for: .findInTab)) { _ in
             findShown = true
@@ -397,6 +396,10 @@ struct ContentView: View {
                                    isPinned: store.pinnedSessionIDs.contains(session.id))
                             .clickable()
                             .tag(session.id)
+                            // One click picks (⌘/⇧ to pick several), two open.
+                            .simultaneousGesture(TapGesture(count: 2).onEnded {
+                                tabs.openSession(session)
+                            })
                             .contextMenu {
                                 // Right-clicking one of several selected chats
                                 // is about all of them, the way it is in Finder.
@@ -450,6 +453,13 @@ struct ContentView: View {
         }
         .listStyle(.sidebar)
         .onDeleteCommand { requestDeletionOfSelection() }
+        .onKeyPress(.return) {
+            // Return opens what is picked, like a double-click.
+            let picked = selectedSessions
+            guard picked.count == 1 else { return .ignored }
+            tabs.openSession(picked[0])
+            return .handled
+        }
         .searchable(text: $searchText, placement: .sidebar, prompt: "Search sessions")
         .navigationSplitViewColumnWidth(min: 240, ideal: 300, max: 420)
         .safeAreaInset(edge: .bottom) {
@@ -532,6 +542,9 @@ struct ContentView: View {
             MCPManagerView()
                 .environmentObject(store)
                 .environmentObject(tabs)
+        }
+        .sheet(isPresented: $showQuickSwitcher) {
+            QuickSwitcherView(tabs: tabs) { showQuickSwitcher = false }
         }
     }
 
@@ -999,6 +1012,12 @@ struct ContentView: View {
         }
     }
 
+    private func setAllCollapsed(_ collapsed: Bool) {
+        withAnimation(.easeOut(duration: 0.18)) {
+            for project in store.projects { store.setCollapsed(project.path, collapsed) }
+        }
+    }
+
     @ViewBuilder
     private func projectMenu(_ project: ClaudeProject) -> some View {
         Button("New Session in This Project") { newSession(in: project.path) }
@@ -1020,6 +1039,9 @@ struct ContentView: View {
             NSPasteboard.general.clearContents()
             NSPasteboard.general.setString(project.path, forType: .string)
         }
+        Divider()
+        Button("Collapse All Projects") { setAllCollapsed(true) }
+        Button("Expand All Projects") { setAllCollapsed(false) }
         Divider()
         Button("Delete All Sessions in \(project.name)…", role: .destructive) {
             requestDeletion(project.sessions, scope: "all \(project.sessions.count) sessions in \(project.name)")
@@ -1179,40 +1201,13 @@ private struct TabStrip: View {
     /// The chip the pointer is over while a tab is being dragged.
     @State private var landing: String?
 
-    private var sections: [(folder: String, tabs: [TerminalTab])] {
-        var order: [String] = []
-        var byFolder: [String: [TerminalTab]] = [:]
-        for tab in tabs.tabs(inPane: pane) {
-            let name = TabsModel.folderName(tab.cwd)
-            if byFolder[name] == nil { order.append(name) }
-            byFolder[name, default: []].append(tab)
-        }
-        return order.map { ($0, byFolder[$0] ?? []) }
-    }
-
     var body: some View {
         ScrollView(.horizontal, showsIndicators: false) {
             HStack(spacing: 4) {
-                ForEach(Array(sections.enumerated()), id: \.element.folder) { index, section in
-                    // A quiet heading with a rule before it, the way the
-                    // sidebar separates its folders. A capsule with an icon
-                    // competes with the tabs for attention it has not earned.
-                    if index > 0 {
-                        Rectangle()
-                            .fill(Color.primary.opacity(0.12))
-                            .frame(width: 1, height: 16)
-                            .padding(.horizontal, 4)
-                    }
-                    Text(section.folder.uppercased())
-                        .font(.system(size: 9, weight: .semibold))
-                        .tracking(0.5)
-                        .foregroundStyle(.tertiary)
-                        .lineLimit(1)
-                        .padding(.trailing, 2)
-                        .help(section.tabs.first?.cwd ?? section.folder)
-                    ForEach(section.tabs) { tab in
+                    ForEach(tabs.orderedTabs(inPane: pane)) { tab in
                         TabChip(
                             tab: tab,
+                            number: tabs.number(of: tab.id),
                             // Showing in this pane, and whether this pane is
                             // the one with the keyboard.
                             isActive: tabs.groupActive.indices.contains(pane)
@@ -1260,7 +1255,6 @@ private struct TabStrip: View {
                         }
                         .animation(.easeOut(duration: 0.12), value: landing)
                     }
-                }
             }
             .padding(.vertical, 5)
         }
@@ -1510,6 +1504,8 @@ private struct PaneDivider: View {
 
 private struct TabChip: View {
     let tab: TerminalTab
+    /// `#N`: the ⌘N that jumps here.
+    let number: Int?
     /// This is the tab its pane is showing.
     let isActive: Bool
     /// And that pane is the one you are typing in.
@@ -1619,6 +1615,12 @@ private struct TabChip: View {
                 Image(systemName: "cursorarrow")
                     .font(.system(size: 9, weight: .medium))
                     .foregroundStyle(.secondary)
+            }
+            if let number {
+                Text("#\(number)")
+                    .font(.system(size: 10, weight: .semibold).monospacedDigit())
+                    .foregroundStyle(isActive || hasFocus ? .primary : .tertiary)
+                    .help(number <= 9 ? "⌘\(number)" : "")
             }
             Text(tab.title)
                 .font(.callout)
@@ -1909,6 +1911,11 @@ private struct SessionRow: View {
 
     var body: some View {
         HStack(spacing: 8) {
+            Image(systemName: session.isCursor ? "cursorarrow.rays" : "bubble.left.and.text.bubble.right")
+                .font(.system(size: 11))
+                .foregroundStyle(.secondary)
+                .frame(width: 16)
+                .padding(.leading, 12)
             VStack(alignment: .leading, spacing: 2) {
                 Text(session.title)
                     .lineLimit(1)

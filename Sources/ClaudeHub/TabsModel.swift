@@ -68,7 +68,15 @@ struct TerminalTab: Identifiable, Hashable {
 
 final class TabsModel: ObservableObject {
     @Published var tabs: [TerminalTab] = []
-    @Published var activeTabID: String?
+    @Published var activeTabID: String? {
+        didSet {
+            guard let id = activeTabID, id != oldValue else { return }
+            recentTabIDs.removeAll { $0 == id }
+            recentTabIDs.insert(id, at: 0)
+        }
+    }
+    /// Most recently shown first; orders the ⌘P quick switcher.
+    private(set) var recentTabIDs: [String] = []
     /// The tabs of each pane, left to right — see `show(_:)`.
     @Published private(set) var groups: [[String]] = []
     /// Which tab each pane is showing.
@@ -266,10 +274,40 @@ final class TabsModel: ObservableObject {
         ))
     }
 
-    /// ⌘1–⌘9
+    /// A pane's tabs in the order its strip draws them.
+    func orderedTabs(inPane index: Int) -> [TerminalTab] {
+        tabs(inPane: index)
+    }
+
+    /// Every tab left to right across the panes, as drawn — what `#N` on a
+    /// chip and ⌘N refer to.
+    var displayOrder: [String] {
+        var ids = groups.indices.flatMap { orderedTabs(inPane: $0).map(\.id) }
+        let seen = Set(ids)
+        ids += tabs.map(\.id).filter { !seen.contains($0) }
+        return ids
+    }
+
+    /// 1-based number shown on a tab's chip.
+    func number(of id: String) -> Int? {
+        displayOrder.firstIndex(of: id).map { $0 + 1 }
+    }
+
+    /// ⌘1–⌘9: the tab labelled `#N`.
     func activate(index: Int) {
-        guard tabs.indices.contains(index) else { return }
-        show(tabs[index].id)
+        let order = displayOrder
+        guard order.indices.contains(index) else { return }
+        show(order[index])
+    }
+
+    /// ⌘← / ⌘→ (and ⇧⌘[ / ⇧⌘]): step through the focused pane's tabs, wrapping.
+    func activateAdjacent(_ step: Int) {
+        let pane = orderedTabs(inPane: focusedPane)
+        let list = pane.isEmpty ? tabs : pane
+        guard !list.isEmpty else { return }
+        let current = list.firstIndex { $0.id == activeTabID } ?? 0
+        let next = ((current + step) % list.count + list.count) % list.count
+        show(list[next].id)
     }
 
     func close(_ id: String) {
