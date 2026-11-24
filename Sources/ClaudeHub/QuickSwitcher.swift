@@ -1,24 +1,59 @@
 import SwiftUI
 
-/// ⌘P: type to filter the open tabs by title or folder, ↑↓ to pick,
-/// Return to jump, Esc to dismiss. Most recently used tabs come first.
+/// ⌘P: type to filter by title or folder, ↑↓ to pick, Return to go, Esc to
+/// dismiss. Open tabs come first, most recently used first; then every other
+/// session in the sidebar, newest first, which opens in a tab when picked.
 struct QuickSwitcherView: View {
     @ObservedObject var tabs: TabsModel
+    /// The sidebar's sessions (hidden ones left out).
+    let sessions: [ClaudeSession]
     let dismiss: () -> Void
+
+    private enum Item: Identifiable {
+        case tab(TerminalTab)
+        case session(ClaudeSession)
+
+        var id: String {
+            switch self {
+            case .tab(let tab): return "t:" + tab.id
+            case .session(let session): return "s:" + session.id
+            }
+        }
+
+        var title: String {
+            switch self {
+            case .tab(let tab): return tab.title
+            case .session(let session): return session.title
+            }
+        }
+
+        var cwd: String {
+            switch self {
+            case .tab(let tab): return tab.cwd
+            case .session(let session): return session.cwd
+            }
+        }
+    }
 
     @State private var query = ""
     @State private var selection = 0
     @FocusState private var fieldFocused: Bool
 
-    private var matches: [TerminalTab] {
+    private var matches: [Item] {
         let recent = tabs.recentTabIDs
         let ordered = tabs.tabs.sorted { a, b in
             (recent.firstIndex(of: a.id) ?? .max) < (recent.firstIndex(of: b.id) ?? .max)
         }
+        // A session with a tab is listed once, as the tab.
+        let open = Set(tabs.tabs.compactMap(\.sessionID))
+        let rest = sessions
+            .filter { !open.contains($0.id) }
+            .sorted { $0.lastActivity > $1.lastActivity }
+        let items = ordered.map(Item.tab) + rest.map(Item.session)
         let words = query.lowercased().split(separator: " ").map(String.init)
-        guard !words.isEmpty else { return ordered }
-        return ordered.filter { tab in
-            let haystack = (tab.title + " " + TabsModel.folderName(tab.cwd) + " " + tab.cwd).lowercased()
+        guard !words.isEmpty else { return items }
+        return items.filter { item in
+            let haystack = (item.title + " " + item.cwd).lowercased()
             return words.allSatisfy { haystack.contains($0) }
         }
     }
@@ -26,7 +61,7 @@ struct QuickSwitcherView: View {
     var body: some View {
         let list = matches
         VStack(spacing: 0) {
-            TextField("Search open tabs", text: $query)
+            TextField("Search tabs and sessions", text: $query)
                 .textFieldStyle(.plain)
                 .font(.title3)
                 .padding(12)
@@ -37,9 +72,9 @@ struct QuickSwitcherView: View {
             ScrollViewReader { proxy in
                 ScrollView {
                     LazyVStack(spacing: 0) {
-                        ForEach(Array(list.enumerated()), id: \.element.id) { index, tab in
-                            row(tab, selected: index == selection)
-                                .id(tab.id)
+                        ForEach(Array(list.enumerated()), id: \.element.id) { index, item in
+                            row(item, selected: index == selection)
+                                .id(item.id)
                                 .contentShape(Rectangle())
                                 .onTapGesture {
                                     selection = index
@@ -54,7 +89,7 @@ struct QuickSwitcherView: View {
                 }
             }
             if list.isEmpty {
-                Text("No open tab matches")
+                Text("Nothing matches")
                     .foregroundStyle(.secondary)
                     .padding()
             }
@@ -66,24 +101,41 @@ struct QuickSwitcherView: View {
         .onKeyPress(.escape) { dismiss(); return .handled }
     }
 
-    private func row(_ tab: TerminalTab, selected: Bool) -> some View {
+    private func row(_ item: Item, selected: Bool) -> some View {
         HStack(spacing: 8) {
-            ActivityDot(activity: TerminalManager.shared.activity(of: tab.id), size: 6)
-                .frame(width: 14)
+            switch item {
+            case .tab(let tab):
+                ActivityDot(activity: TerminalManager.shared.activity(of: tab.id), size: 6)
+                    .frame(width: 14)
+            case .session(let session):
+                Image(systemName: session.isCursor ? "cursorarrow.rays" : "text.bubble")
+                    .font(.system(size: 10))
+                    .foregroundStyle(selected ? Color.white.opacity(0.8) : .secondary)
+                    .frame(width: 14)
+            }
             VStack(alignment: .leading, spacing: 1) {
-                Text(tab.title).lineLimit(1)
-                Text(TabsModel.folderName(tab.cwd))
+                Text(item.title).lineLimit(1)
+                Text(SidebarTree.abbreviate(item.cwd))
                     .font(.caption)
                     .foregroundStyle(selected ? Color.white.opacity(0.8) : .secondary)
                     .lineLimit(1)
+                    .truncationMode(.middle)
             }
             Spacer()
-            if let number = tabs.number(of: tab.id) {
-                Text("#\(number)").font(.caption.monospacedDigit())
+            switch item {
+            case .tab(let tab):
+                if let number = tabs.number(of: tab.id) {
+                    Text("#\(number)").font(.caption.monospacedDigit())
+                        .foregroundStyle(selected ? Color.white.opacity(0.8) : .secondary)
+                }
+                if tab.id == tabs.activeTabID {
+                    Text("current").font(.caption)
+                        .foregroundStyle(selected ? Color.white.opacity(0.8) : .secondary)
+                }
+            case .session(let session):
+                Text(session.lastActivity, format: .relative(presentation: .named))
+                    .font(.caption)
                     .foregroundStyle(selected ? Color.white.opacity(0.8) : .secondary)
-            }
-            if tab.id == tabs.activeTabID {
-                Text("current").font(.caption).foregroundStyle(.secondary)
             }
         }
         .padding(.horizontal, 8)
@@ -93,14 +145,17 @@ struct QuickSwitcherView: View {
                     in: RoundedRectangle(cornerRadius: 5))
     }
 
-    private func move(_ step: Int, in list: [TerminalTab]) {
+    private func move(_ step: Int, in list: [Item]) {
         guard !list.isEmpty else { return }
         selection = min(max(selection + step, 0), list.count - 1)
     }
 
-    private func open(_ list: [TerminalTab]) {
+    private func open(_ list: [Item]) {
         guard list.indices.contains(selection) else { return }
-        tabs.show(list[selection].id)
+        switch list[selection] {
+        case .tab(let tab): tabs.show(tab.id)
+        case .session(let session): tabs.openSession(session)
+        }
         dismiss()
     }
 }

@@ -92,6 +92,8 @@ struct ClaudeHubApp: App {
         .commands {
             CommandGroup(after: .appInfo) {
                 Button("Check for Updates…") { UpdateChecker.shared.check() }
+                Button("Restart ClaudeHub") { AppRestart.restart() }
+                    .keyboardShortcut("r", modifiers: [.command, .control])
             }
             CommandGroup(replacing: .newItem) {
                 NewItemCommands(store: store, tabs: tabs)
@@ -182,7 +184,6 @@ struct ClaudeHubApp: App {
                     NotificationCenter.default.post(name: .showQuickSwitcher, object: nil)
                 }
                 .keyboardShortcut("p", modifiers: .command)
-                .disabled(tabs.tabs.isEmpty)
                 Button("Previous Tab") { tabs.activateAdjacent(-1) }
                     .keyboardShortcut(.leftArrow, modifiers: .command)
                     .disabled(tabs.tabs.count < 2)
@@ -270,5 +271,28 @@ enum AppAppearance: String {
         } else {
             DispatchQueue.main.async { NSApp.appearance = appearance }
         }
+    }
+}
+
+/// ClaudeHub → Restart: quit, then open the same app again once it has gone.
+///
+/// Quitting goes through the usual path, so the "terminals are still running"
+/// question still gets asked; answering Cancel leaves the app running and the
+/// helper simply finds it never exited.
+enum AppRestart {
+    static func restart() {
+        let pid = ProcessInfo.processInfo.processIdentifier
+        let app = Bundle.main.bundlePath
+        // Waits up to 60s for this process to exit, then reopens the bundle.
+        let script = """
+        for i in $(seq 1 300); do kill -0 \(pid) 2>/dev/null || { open "$0"; exit 0; }; sleep 0.2; done
+        """
+        let helper = Process()
+        helper.executableURL = URL(fileURLWithPath: "/bin/sh")
+        helper.arguments = ["-c", script, app]
+        do { try helper.run() } catch { return }
+        NSApp.terminate(nil)
+        // Still here: the quit was cancelled, so there is nothing to reopen.
+        helper.terminate()
     }
 }

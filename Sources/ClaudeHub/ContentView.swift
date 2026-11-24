@@ -346,7 +346,6 @@ struct ContentView: View {
             showMCPManager = true
         }
         .onReceive(NotificationCenter.default.publisher(for: .showQuickSwitcher)) { _ in
-            guard !tabs.tabs.isEmpty else { return }
             showQuickSwitcher = true
         }
         .onReceive(NotificationCenter.default.publisher(for: .findInTab)) { _ in
@@ -590,7 +589,11 @@ struct ContentView: View {
                 .environmentObject(tabs)
         }
         .sheet(isPresented: $showQuickSwitcher) {
-            QuickSwitcherView(tabs: tabs) { showQuickSwitcher = false }
+            QuickSwitcherView(
+                tabs: tabs,
+                sessions: store.projects.flatMap(\.sessions)
+                    .filter { !store.hiddenSessionIDs.contains($0.id) }
+            ) { showQuickSwitcher = false }
         }
     }
 
