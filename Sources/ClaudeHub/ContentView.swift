@@ -295,6 +295,12 @@ struct ContentView: View {
             tabs.adoptSessionTitles(from: projects)
             git.track(projects: projects.map(\.path))
         }
+        .onChange(of: selectedSessionIDs) { _, ids in
+            // Gathering several chats is picking what to act on, not asking to
+            // open each one on the way.
+            guard ids.count == 1, let id = ids.first, let session = session(withID: id) else { return }
+            tabs.openSession(session)
+        }
         .onChange(of: tabs.activeTabID) { previous, _ in
             // Keep the sidebar in sync with the active tab (nil for fresh-session
             // tabs) — but never from inside the update that brought us here.
@@ -363,54 +369,92 @@ struct ContentView: View {
         }
     }
 
+    /// The projects as a directory tree, flattened in drawing order.
+    private var sidebarRows: [SidebarRow] {
+        SidebarTree.rows(for: filteredProjects) { path in
+            searchText.isEmpty && store.collapsedProjects.contains(path)
+        }
+    }
+
+    private func toggleFold(_ path: String) {
+        withAnimation(.easeOut(duration: 0.18)) {
+            store.setCollapsed(path, !store.collapsedProjects.contains(path))
+        }
+    }
+
+    @ViewBuilder
+    private func sidebarRow(_ row: SidebarRow) -> some View {
+        switch row.kind {
+        case .folder(let path, let label, let sessions):
+            FolderRow(label: label,
+                      path: path,
+                      count: sessions.count,
+                      isExpanded: !store.collapsedProjects.contains(path),
+                      toggle: { toggleFold(path) })
+                .selectionDisabled()
+                .contextMenu { folderMenu(path: path, label: label, sessions: sessions) }
+        case .project(let project, let label, let sessions):
+            ProjectHeader(
+                project: project,
+                isExpanded: !store.collapsedProjects.contains(project.path),
+                toggle: { toggleFold(project.path) },
+                repos: git.repos(forProjectAt: project.path),
+                newSession: { tabs.openNewSession(cwd: project.path); store.refreshSoon() },
+                title: label,
+                count: sessions.count,
+                menu: { projectMenu(project, subtree: sessions) }
+            )
+            .selectionDisabled()
+        case .session(let session):
+            SessionRow(session: session,
+                       activity: activity(of: session),
+                       isHidden: store.hiddenSessionIDs.contains(session.id),
+                       isPinned: store.pinnedSessionIDs.contains(session.id))
+                .clickable()
+                .tag(session.id)
+                .contextMenu {
+                    // Right-clicking one of several selected chats is about
+                    // all of them, the way it is in Finder.
+                    if selectedSessionIDs.count > 1 && selectedSessionIDs.contains(session.id) {
+                        selectionMenu()
+                    } else {
+                        sessionMenu(session)
+                    }
+                }
+        }
+    }
+
+    @ViewBuilder
+    private func folderMenu(path: String, label: String, sessions: [ClaudeSession]) -> some View {
+        Button("Reveal in Finder") {
+            NSWorkspace.shared.selectFile(nil, inFileViewerRootedAtPath: path)
+        }
+        Button("Copy Path") {
+            NSPasteboard.general.clearContents()
+            NSPasteboard.general.setString(path, forType: .string)
+        }
+        Divider()
+        Button("Collapse All") { setAllCollapsed(true) }
+        Button("Expand All") { setAllCollapsed(false) }
+        Divider()
+        Button("Delete All \(sessions.count) Sessions under \(label)…", role: .destructive) {
+            requestDeletion(sessions, scope: "all \(sessions.count) sessions under \(label)")
+        }
+    }
+
     private var sidebar: some View {
         // Every row is a leaf, headers included: no Section, no DisclosureGroup.
         // Those make the sidebar an outline, and SwiftUI's outline has crashed
         // the app when a group changed shape while it was being redrawn — a
         // folded project is a section with no rows left.
         List(selection: $selectedSessionIDs) {
-            ForEach(filteredProjects) { project in
-                // Folding is ours, not the system's: the sidebar's own
-                // hover-to-fold toggle sat under the ⊕ and could leave a
-                // project folded with no visible way back. A search shows
-                // every match whatever is folded.
-                ProjectHeader(
-                    project: project,
-                    isExpanded: !store.collapsedProjects.contains(project.path),
-                    toggle: {
-                        withAnimation(.easeOut(duration: 0.18)) {
-                            store.setCollapsed(project.path,
-                                               !store.collapsedProjects.contains(project.path))
-                        }
-                    },
-                    repos: git.repos(forProjectAt: project.path),
-                    newSession: { tabs.openNewSession(cwd: project.path); store.refreshSoon() },
-                    menu: { projectMenu(project) }
-                )
-                .selectionDisabled()
-                if !searchText.isEmpty || !store.collapsedProjects.contains(project.path) {
-                    ForEach(project.sessions) { session in
-                        SessionRow(session: session,
-                                   activity: activity(of: session),
-                                   isHidden: store.hiddenSessionIDs.contains(session.id),
-                                   isPinned: store.pinnedSessionIDs.contains(session.id))
-                            .clickable()
-                            .tag(session.id)
-                            // One click picks (⌘/⇧ to pick several), two open.
-                            .simultaneousGesture(TapGesture(count: 2).onEnded {
-                                tabs.openSession(session)
-                            })
-                            .contextMenu {
-                                // Right-clicking one of several selected chats
-                                // is about all of them, the way it is in Finder.
-                                if selectedSessionIDs.count > 1 && selectedSessionIDs.contains(session.id) {
-                                    selectionMenu()
-                                } else {
-                                    sessionMenu(session)
-                                }
-                            }
-                    }
-                }
+            // Folding is ours, not the system's: the sidebar's own
+            // hover-to-fold toggle sat under the ⊕ and could leave a project
+            // folded with no visible way back. A search shows every match
+            // whatever is folded.
+            ForEach(sidebarRows) { row in
+                sidebarRow(row)
+                    .padding(.leading, CGFloat(row.depth) * 14)
             }
 
             if !git.dirtyRepos.isEmpty {
@@ -453,13 +497,6 @@ struct ContentView: View {
         }
         .listStyle(.sidebar)
         .onDeleteCommand { requestDeletionOfSelection() }
-        .onKeyPress(.return) {
-            // Return opens what is picked, like a double-click.
-            let picked = selectedSessions
-            guard picked.count == 1 else { return .ignored }
-            tabs.openSession(picked[0])
-            return .handled
-        }
         .searchable(text: $searchText, placement: .sidebar, prompt: "Search sessions")
         .navigationSplitViewColumnWidth(min: 240, ideal: 300, max: 420)
         .safeAreaInset(edge: .bottom) {
@@ -1014,12 +1051,20 @@ struct ContentView: View {
 
     private func setAllCollapsed(_ collapsed: Bool) {
         withAnimation(.easeOut(duration: 0.18)) {
-            for project in store.projects { store.setCollapsed(project.path, collapsed) }
+            // Folders as well as projects: every directory the tree draws.
+            let paths = SidebarTree.rows(for: filteredProjects) { _ in false }.compactMap { row -> String? in
+                switch row.kind {
+                case .folder(let path, _, _): return path
+                case .project(let project, _, _): return project.path
+                case .session: return nil
+                }
+            }
+            for path in paths { store.setCollapsed(path, collapsed) }
         }
     }
 
     @ViewBuilder
-    private func projectMenu(_ project: ClaudeProject) -> some View {
+    private func projectMenu(_ project: ClaudeProject, subtree: [ClaudeSession]) -> some View {
         Button("New Session in This Project") { newSession(in: project.path) }
         if CursorAgent.isInstalled {
             Button("New Cursor Chat in This Project") { newCursorChat(in: project.path) }
@@ -1040,11 +1085,16 @@ struct ContentView: View {
             NSPasteboard.general.setString(project.path, forType: .string)
         }
         Divider()
-        Button("Collapse All Projects") { setAllCollapsed(true) }
-        Button("Expand All Projects") { setAllCollapsed(false) }
+        Button("Collapse All") { setAllCollapsed(true) }
+        Button("Expand All") { setAllCollapsed(false) }
         Divider()
         Button("Delete All Sessions in \(project.name)…", role: .destructive) {
             requestDeletion(project.sessions, scope: "all \(project.sessions.count) sessions in \(project.name)")
+        }
+        if subtree.count > project.sessions.count {
+            Button("Delete All \(subtree.count) Sessions under \(project.name)…", role: .destructive) {
+                requestDeletion(subtree, scope: "all \(subtree.count) sessions under \(project.name)")
+            }
         }
     }
 
@@ -1090,10 +1140,12 @@ struct ContentView: View {
         // Several are only the ones you can still see: a search or a fold
         // takes rows off screen without unselecting them, and a delete should
         // not reach chats you are no longer looking at.
-        return filteredProjects
-            .filter { !searchText.isEmpty || !store.collapsedProjects.contains($0.path) }
-            .flatMap(\.sessions)
-            .filter { selectedSessionIDs.contains($0.id) }
+        return sidebarRows.compactMap { row -> ClaudeSession? in
+            if case .session(let session) = row.kind, selectedSessionIDs.contains(session.id) {
+                return session
+            }
+            return nil
+        }
     }
 
     /// The ⌫ key in the sidebar, ⌘⌫ from the menu, or the menu on a selection.
@@ -1911,7 +1963,7 @@ private struct SessionRow: View {
 
     var body: some View {
         HStack(spacing: 8) {
-            Image(systemName: session.isCursor ? "cursorarrow.rays" : "bubble.left.and.text.bubble.right")
+            Image(systemName: session.isCursor ? "cursorarrow.rays" : "text.bubble")
                 .font(.system(size: 11))
                 .foregroundStyle(.secondary)
                 .frame(width: 16)
@@ -1951,6 +2003,40 @@ private struct SessionRow: View {
     }
 }
 
+/// A directory that only groups projects below it — no sessions ran in it.
+private struct FolderRow: View {
+    let label: String
+    let path: String
+    let count: Int
+    let isExpanded: Bool
+    let toggle: () -> Void
+
+    var body: some View {
+        HStack(spacing: 5) {
+            Image(systemName: "chevron.right")
+                .font(.system(size: 9, weight: .semibold))
+                .foregroundStyle(.secondary)
+                .rotationEffect(.degrees(isExpanded ? 90 : 0))
+                .frame(width: 12, height: 14)
+            Image(systemName: isExpanded ? "folder" : "folder.fill")
+                .font(.system(size: 11))
+                .foregroundStyle(.secondary)
+            Text(label)
+                .font(.system(size: 11, weight: .semibold))
+                .foregroundStyle(.secondary)
+                .lineLimit(1)
+                .truncationMode(.middle)
+            Text("\(count)")
+                .font(.system(size: 11).monospacedDigit())
+                .foregroundStyle(.tertiary)
+            Spacer()
+        }
+        .contentShape(Rectangle())
+        .onTapGesture(perform: toggle)
+        .help(SidebarTree.abbreviate(path))
+    }
+}
+
 private struct ProjectHeader<MenuContent: View>: View {
     let project: ClaudeProject
     let isExpanded: Bool
@@ -1959,6 +2045,10 @@ private struct ProjectHeader<MenuContent: View>: View {
     /// folder you work in tends to hold a handful of them.
     let repos: [RepoStatus]
     let newSession: () -> Void
+    /// The name the tree gives it, relative to the row above; nil for the folder name.
+    var title: String? = nil
+    /// Sessions in it and everything below it.
+    var count: Int? = nil
     @ViewBuilder let menu: () -> MenuContent
     @State private var isHovering = false
 
@@ -2006,11 +2096,12 @@ private struct ProjectHeader<MenuContent: View>: View {
                 .padding(.top, 1)
             VStack(alignment: .leading, spacing: 1) {
                 HStack(spacing: 5) {
-                    Text(project.name)
+                    Text(title ?? project.name)
                         .font(.system(size: 11, weight: .semibold))
                         .foregroundStyle(.secondary)
                         .lineLimit(1)
-                    Text("\(project.sessions.count)")
+                        .truncationMode(.middle)
+                    Text("\(count ?? project.sessions.count)")
                         .font(.system(size: 11).monospacedDigit())
                         .foregroundStyle(.tertiary)
                 }

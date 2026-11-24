@@ -1,4 +1,5 @@
 import Foundation
+import LocalAuthentication
 import Security
 
 /// Long-lived `claude setup-token` tokens, one per account, in the login
@@ -107,13 +108,16 @@ enum TokenStore {
     /// off the main thread.
     @discardableResult
     static func read(_ profile: String) -> Access {
+        // The reason shown if macOS asks before handing the token over.
+        let context = LAContext()
+        context.localizedReason = "run Claude sessions as \(profile)"
         let query: [String: Any] = [
             kSecClass as String: kSecClassGenericPassword,
             kSecAttrService as String: service,
             kSecAttrAccount as String: profile,
             kSecReturnData as String: true,
             kSecMatchLimit as String: kSecMatchLimitOne,
-            kSecUseOperationPrompt as String: "run Claude sessions as \(profile)",
+            kSecUseAuthenticationContext as String: context,
         ]
         var item: CFTypeRef?
         let status = SecItemCopyMatching(query as CFDictionary, &item)
