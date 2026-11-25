@@ -1,5 +1,6 @@
 import Foundation
 import Combine
+import CoreServices
 
 final class SessionStore: ObservableObject {
     /// The sessions open in a tab, kept by `TabsModel`. Used to decide whether
@@ -12,8 +13,12 @@ final class SessionStore: ObservableObject {
     private let projectsRoot = FileManager.default.homeDirectoryForCurrentUser
         .appendingPathComponent(".claude/projects")
 
+    /// Set when a refresh is asked for mid-scan: the scan in flight may have
+    /// read the folder before the change, so one more runs after it.
+    private var refreshAgain = false
+
     func refresh() {
-        guard !isLoading else { return }
+        guard !isLoading else { return refreshAgain = true }
         isLoading = true
         let root = projectsRoot
         DispatchQueue.global(qos: .userInitiated).async {
@@ -23,8 +28,58 @@ final class SessionStore: ObservableObject {
                 // changed should not be redrawn for it.
                 if projects != self.projects { self.projects = projects }
                 self.isLoading = false
+                if self.refreshAgain {
+                    self.refreshAgain = false
+                    self.refresh()
+                }
             }
         }
+    }
+
+    // MARK: - Watching ~/.claude/projects
+
+    private var stream: FSEventStreamRef?
+
+    init() {
+        startWatching()
+    }
+
+    deinit {
+        if let stream {
+            FSEventStreamStop(stream)
+            FSEventStreamInvalidate(stream)
+            FSEventStreamRelease(stream)
+        }
+    }
+
+    /// Rescans when anything under ~/.claude/projects changes — a `/rename`,
+    /// a new session, one deleted from the command line — so the sidebar no
+    /// longer waits for the window to be re-activated or ⌘R.
+    ///
+    /// The 2s latency lets FSEvents coalesce: a session that is working appends
+    /// to its transcript constantly, and that costs one rescan every couple of
+    /// seconds at most, not one per line.
+    private func startWatching() {
+        var context = FSEventStreamContext(
+            version: 0,
+            info: Unmanaged.passUnretained(self).toOpaque(),
+            retain: nil, release: nil, copyDescription: nil
+        )
+        let callback: FSEventStreamCallback = { _, info, _, _, _, _ in
+            guard let info else { return }
+            let store = Unmanaged<SessionStore>.fromOpaque(info).takeUnretainedValue()
+            store.refresh()
+        }
+        guard let stream = FSEventStreamCreate(
+            kCFAllocatorDefault, callback, &context,
+            [projectsRoot.path] as CFArray,
+            FSEventStreamEventId(kFSEventStreamEventIdSinceNow),
+            2.0,
+            FSEventStreamCreateFlags(kFSEventStreamCreateFlagNoDefer)
+        ) else { return }
+        FSEventStreamSetDispatchQueue(stream, .main)
+        FSEventStreamStart(stream)
+        self.stream = stream
     }
 
     /// A brand-new session only lands on disk once Claude has written its
