@@ -73,6 +73,7 @@ struct ClaudeHubApp: App {
     @StateObject private var cursorUsage = CursorUsageStore()
     @AppStorage(AppAppearance.key) private var appearance = AppAppearance.system.rawValue
     @AppStorage("showChangesInSidebar") private var showChanges = false
+    @AppStorage(DroppableTerminalView.copyOnSelectKey) private var copyOnSelect = true
     @AppStorage(SidebarOrder.key) private var sidebarOrder = SidebarOrder.fixed.rawValue
     @AppStorage(DarkTerminalScheme.key) private var darkScheme = DarkTerminalScheme.vsCode.rawValue
     @AppStorage(LightTerminalScheme.key) private var lightScheme = LightTerminalScheme.white.rawValue
@@ -161,6 +162,7 @@ struct ClaudeHubApp: App {
                 }
                 .onChange(of: appearance) { _, value in AppAppearance.apply(value) }
                 Toggle("Show Changes in Sidebar", isOn: $showChanges)
+                Toggle("Copy on Select", isOn: $copyOnSelect)
                 Picker("Sidebar Order", selection: $sidebarOrder) {
                     Text("Fixed (folders A–Z, sessions by start)").tag(SidebarOrder.fixed.rawValue)
                     Text("Recent Activity First").tag(SidebarOrder.recent.rawValue)

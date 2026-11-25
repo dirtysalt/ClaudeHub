@@ -47,12 +47,19 @@ final class DroppableTerminalView: LocalProcessTerminalView {
 
     // MARK: Selecting
 
-    /// In a Cursor chat, selecting text copies it, the way the standalone
-    /// CursorHub did. A tap that only moves the caret selects nothing, so the
-    /// clipboard stays as it was.
+    /// View → Copy on Select (on unless turned off).
+    static let copyOnSelectKey = "copyOnSelect"
+    static var copyOnSelect: Bool {
+        UserDefaults.standard.object(forKey: copyOnSelectKey) as? Bool ?? true
+    }
+
+    /// Selecting text copies it, the way iTerm2 does (and Cursor chats always
+    /// do). A tap that only moves the caret selects nothing, so the clipboard
+    /// stays as it was.
     override func mouseUp(with event: NSEvent) {
         super.mouseUp(with: event)
-        guard isCursorAgent, let text = getSelection(), !text.isEmpty else { return }
+        guard isCursorAgent || Self.copyOnSelect,
+              let text = getSelection(), !text.isEmpty else { return }
         NSPasteboard.general.clearContents()
         NSPasteboard.general.setString(text, forType: .string)
     }
