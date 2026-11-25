@@ -492,16 +492,14 @@ final class TerminalManager: NSObject, ObservableObject {
 
         switch tab.kind {
         case .resume(let sessionID):
-            start(view, envArray, "exec \(ClaudeSession.shellQuote(claudePath)) --resume \(ClaudeSession.shellQuote(sessionID))", in: tab.cwd)
+            start(view, envArray, launchLine("--resume", sessionID), in: tab.cwd)
         case .newSession(let sessionID):
             // ⌘N — a fresh Claude session in the tab's folder, under the id the
             // tab was opened with, so the sidebar row and this tab are the same
             // session from the start. Restarting a tab that already has a
             // transcript resumes it: --session-id refuses an id that is taken.
             let flag = Self.transcriptExists(sessionID) ? "--resume" : "--session-id"
-            start(view, envArray,
-                  "exec \(ClaudeSession.shellQuote(claudePath)) \(flag) \(ClaudeSession.shellQuote(sessionID))",
-                  in: tab.cwd)
+            start(view, envArray, launchLine(flag, sessionID), in: tab.cwd)
         case .command(let args):
             // `claude auth login`, `auth logout` — the shell stays afterwards so
             // the result is still readable instead of the tab dropping dead.
@@ -560,6 +558,32 @@ final class TerminalManager: NSObject, ObservableObject {
     }
 
     /// A login shell gives `claude` the same PATH the user's terminal has.
+    /// Claude menu → Launch Command…: what conversations run instead of the
+    /// `claude` binary — typically a shell function from ~/.shrc that sets up
+    /// the environment and then calls `claude "$@"`. Empty means `claude`.
+    static let launchCommandKey = "claudeLaunchCommand"
+
+    static var launchCommand: String {
+        (UserDefaults.standard.string(forKey: launchCommandKey) ?? "")
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+    }
+
+    /// The shell line that starts a conversation with `flag` (`--resume` or
+    /// `--session-id`) and its id.
+    ///
+    /// A custom command is usually a function, which only exists once
+    /// ~/.shrc has been read — this shell is a login shell, not an
+    /// interactive one, so ~/.zshrc never sources it — and a function
+    /// cannot be `exec`ed, so it runs as a child of the shell instead.
+    func launchLine(_ flag: String, _ sessionID: String) -> String {
+        let args = "\(flag) \(ClaudeSession.shellQuote(sessionID))"
+        let custom = Self.launchCommand
+        guard !custom.isEmpty else {
+            return "exec \(ClaudeSession.shellQuote(claudePath)) \(args)"
+        }
+        return "[ -f ~/.shrc ] && source ~/.shrc >/dev/null 2>&1; \(custom) \(args)"
+    }
+
     private func start(_ view: LocalProcessTerminalView, _ env: [String], _ command: String, in cwd: String) {
         view.startProcess(
             executable: "/bin/zsh",

@@ -19,6 +19,9 @@ struct ClaudeSession: Identifiable, Hashable {
     var agent: ChatAgent = .claude
     /// Where the Cursor agent writes this chat's conversation out, if it has.
     var cursorTranscript: URL? = nil
+    /// When the transcript was created — the session's start, which unlike
+    /// `lastActivity` never moves, so the sidebar can keep a fixed order.
+    var startedAt: Date? = nil
 
     var isCursor: Bool { agent == .cursor }
 

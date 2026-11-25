@@ -296,7 +296,7 @@ final class SessionStore: ObservableObject {
         // Session transcripts are named by UUID; skip anything else (e.g. agent sidechains)
         guard UUID(uuidString: id) != nil else { return nil }
 
-        guard let attrs = try? file.resourceValues(forKeys: [.contentModificationDateKey, .fileSizeKey]),
+        guard let attrs = try? file.resourceValues(forKeys: [.contentModificationDateKey, .creationDateKey, .fileSizeKey]),
               let mtime = attrs.contentModificationDate,
               let size = attrs.fileSize, size > 0 else { return nil }
 
@@ -352,7 +352,8 @@ final class SessionStore: ObservableObject {
             title: title,
             cwd: cwd,
             lastActivity: lastActivity,
-            fileURL: file
+            fileURL: file,
+            startedAt: attrs.creationDate
         )
     }
 

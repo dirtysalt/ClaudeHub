@@ -65,8 +65,40 @@ struct RepoStatus: Identifiable, Equatable {
 /// editor's job, and a good one is already open. It is "where did I leave work
 /// lying around", across every project in the sidebar, which is the same
 /// question the session list answers and nothing else on screen does.
+/// One checkout of a repository, from `git worktree list`.
+struct Worktree: Identifiable, Equatable {
+    let path: String
+    /// Nil for a detached HEAD.
+    let branch: String?
+    /// The repository's own checkout rather than an added worktree.
+    let isMain: Bool
+
+    var id: String { path }
+    var label: String { branch ?? (path as NSString).lastPathComponent }
+}
+
 final class GitStore: ObservableObject {
     @Published private(set) var repos: [RepoStatus] = []
+    /// Every checkout of the sidebar's repositories, keyed by repository
+    /// root — so a worktree made a moment ago, which has no sessions and so
+    /// no place in the sidebar yet, is one ⌘P away from its first one.
+    @Published private(set) var worktreesByRoot: [String: [Worktree]] = [:]
+
+    /// All known worktrees, each once, added worktrees before main checkouts.
+    var allWorktrees: [Worktree] {
+        var seen = Set<String>()
+        return worktreesByRoot.values.flatMap { $0 }
+            .filter { seen.insert($0.path).inserted }
+            .sorted { ($0.isMain ? 1 : 0, $0.label) < ($1.isMain ? 1 : 0, $1.label) }
+    }
+
+    /// The worktrees of the repositories a project folder covers.
+    func worktrees(forProjectAt path: String) -> [Worktree] {
+        var seen = Set<String>()
+        return repos(forProjectAt: path)
+            .flatMap { worktreesByRoot[$0.root] ?? [] }
+            .filter { seen.insert($0.path).inserted }
+    }
 
     private var roots: [String] = []
     /// Project folder → the repositories in it, so the filesystem is walked
@@ -144,7 +176,10 @@ final class GitStore: ObservableObject {
 
         queue.async {
             let statuses = roots.compactMap { Self.read(root: $0, git: git) }
+            var worktrees: [String: [Worktree]] = [:]
+            for root in roots { worktrees[root] = Self.worktrees(of: root, git: git) }
             DispatchQueue.main.async {
+                if worktrees != self.worktreesByRoot { self.worktreesByRoot = worktrees }
                 self.scanning = false
                 let sorted = statuses.sorted { ($0.pending, $1.name) > ($1.pending, $0.name) }
                 guard sorted != self.repos else { return }
@@ -203,6 +238,29 @@ final class GitStore: ObservableObject {
             url.deleteLastPathComponent()
         }
         return nil
+    }
+
+    /// `git worktree list --porcelain`: blocks of `worktree <path>`,
+    /// `branch refs/heads/<name>` (or `detached`), separated by blank lines.
+    /// The first block is the main checkout. Folders that are gone are left out.
+    static func worktrees(of root: String, git: String = binary) -> [Worktree] {
+        guard let text = run(["worktree", "list", "--porcelain"], in: root, git: git) else { return [] }
+        var result: [Worktree] = []
+        for block in text.components(separatedBy: "\n\n") {
+            var path: String?
+            var branch: String?
+            for line in block.split(separator: "\n") {
+                if line.hasPrefix("worktree ") {
+                    path = String(line.dropFirst("worktree ".count))
+                } else if line.hasPrefix("branch ") {
+                    branch = String(line.dropFirst("branch ".count))
+                        .replacingOccurrences(of: "refs/heads/", with: "")
+                }
+            }
+            guard let path, FileManager.default.fileExists(atPath: path) else { continue }
+            result.append(Worktree(path: path, branch: branch, isMain: result.isEmpty))
+        }
+        return result
     }
 
     private static func read(root: String, git: String) -> RepoStatus? {

@@ -38,12 +38,24 @@ struct ContentView: View {
                      : LightTerminalScheme.current.background)
     }
 
+    @AppStorage(SidebarOrder.key) private var sidebarOrder = SidebarOrder.fixed.rawValue
+
     private var filteredProjects: [ClaudeProject] {
-        let visible: [ClaudeProject] = store.projects.compactMap { project in
+        let fixed = SidebarOrder(rawValue: sidebarOrder) != .recent
+        // The store hands projects and sessions over newest activity first.
+        // Fixed order keeps rows where they are while sessions work and the
+        // sidebar refreshes: folders by path, sessions by when they started.
+        let projects = fixed
+            ? store.projects.sorted { $0.path.localizedStandardCompare($1.path) == .orderedAscending }
+            : store.projects
+        let visible: [ClaudeProject] = projects.compactMap { project in
             var copy = project
-            copy.sessions = store.ordered(project.sessions.filter {
+            let sessions = project.sessions.filter {
                 showHiddenSessions || !store.hiddenSessionIDs.contains($0.id)
-            })
+            }
+            copy.sessions = store.ordered(fixed
+                ? sessions.sorted { ($0.startedAt ?? $0.lastActivity) > ($1.startedAt ?? $1.lastActivity) }
+                : sessions)
             return copy.sessions.isEmpty ? nil : copy
         }
         guard !searchText.isEmpty else { return visible }
@@ -351,6 +363,8 @@ struct ContentView: View {
             showMCPManager = true
         }
         .onReceive(NotificationCenter.default.publisher(for: .showQuickSwitcher)) { _ in
+            // A worktree made a moment ago should already be in the list.
+            git.scan()
             showQuickSwitcher = true
         }
         .onReceive(NotificationCenter.default.publisher(for: .findInTab)) { _ in
@@ -597,7 +611,9 @@ struct ContentView: View {
             QuickSwitcherView(
                 tabs: tabs,
                 sessions: store.projects.flatMap(\.sessions)
-                    .filter { !store.hiddenSessionIDs.contains($0.id) }
+                    .filter { !store.hiddenSessionIDs.contains($0.id) },
+                worktrees: git.allWorktrees,
+                onNewSession: { path in newSession(in: path) }
             ) { showQuickSwitcher = false }
         }
     }
@@ -1090,6 +1106,16 @@ struct ContentView: View {
             Button("New Cursor Chat in This Project") { newCursorChat(in: project.path) }
         }
         Button("New Terminal in This Project") { tabs.openNewTab(cwd: project.path) }
+        let worktrees = git.worktrees(forProjectAt: project.path).filter { $0.path != project.path }
+        if !worktrees.isEmpty {
+            Menu("New Session in Worktree") {
+                ForEach(worktrees) { worktree in
+                    Button(worktree.isMain ? "\(worktree.label) (main checkout)" : worktree.label) {
+                        newSession(in: worktree.path)
+                    }
+                }
+            }
+        }
         Divider()
         if Self.vsCodeURL != nil {
             Button("Open in VS Code") { openInVSCode(project.path) }
@@ -2194,4 +2220,13 @@ private struct ProjectHeader<MenuContent: View>: View {
 /// A plain flag: the worst a race can do is one extra line read.
 final class SearchToken: @unchecked Sendable {
     var cancelled = false
+}
+
+/// View → Sidebar Order.
+enum SidebarOrder: String {
+    /// Folders by path, sessions newest-started first: rows stay put.
+    case fixed
+    /// Most recent activity first: what you just used rises to the top.
+    case recent
+    static let key = "sidebarOrder"
 }

@@ -72,6 +72,7 @@ struct ClaudeHubApp: App {
     @StateObject private var git = GitStore()
     @StateObject private var cursorUsage = CursorUsageStore()
     @AppStorage(AppAppearance.key) private var appearance = AppAppearance.system.rawValue
+    @AppStorage(SidebarOrder.key) private var sidebarOrder = SidebarOrder.fixed.rawValue
     @AppStorage(DarkTerminalScheme.key) private var darkScheme = DarkTerminalScheme.vsCode.rawValue
     @AppStorage(LightTerminalScheme.key) private var lightScheme = LightTerminalScheme.white.rawValue
 
@@ -158,6 +159,10 @@ struct ClaudeHubApp: App {
                     Text("Dark").tag(AppAppearance.dark.rawValue)
                 }
                 .onChange(of: appearance) { _, value in AppAppearance.apply(value) }
+                Picker("Sidebar Order", selection: $sidebarOrder) {
+                    Text("Fixed (folders A–Z, sessions by start)").tag(SidebarOrder.fixed.rawValue)
+                    Text("Recent Activity First").tag(SidebarOrder.recent.rawValue)
+                }
                 Picker("Dark Terminal Colors", selection: $darkScheme) {
                     ForEach(DarkTerminalScheme.allCases) { scheme in
                         Text(scheme.name).tag(scheme.rawValue)
@@ -187,6 +192,10 @@ struct ClaudeHubApp: App {
                     .disabled(!ClaudeCommands.canSend(tabs))
                 Button("Model…") { ClaudeCommands.send("/model", tabs: tabs) }
                     .disabled(!ClaudeCommands.canSend(tabs))
+
+                Divider()
+
+                Button("Launch Command…") { LaunchCommandPrompt.show() }
 
                 Divider()
 
@@ -312,5 +321,30 @@ enum AppRestart {
         NSApp.terminate(nil)
         // Still here: the quit was cancelled, so there is nothing to reopen.
         helper.terminate()
+    }
+}
+
+/// Claude → Launch Command…: asks for the command conversations start with.
+enum LaunchCommandPrompt {
+    static func show() {
+        let alert = NSAlert()
+        alert.messageText = "Launch Command"
+        alert.informativeText = """
+        What new and resumed conversations run instead of `claude`, e.g. a \
+        shell function from ~/.shrc such as run-celerdata-claude. It is \
+        called with --resume <id> or --session-id <id> appended, so it should \
+        pass its arguments on to claude ("$@"). Leave empty for plain claude. \
+        Applies to tabs opened or restarted from now on.
+        """
+        let field = NSTextField(frame: NSRect(x: 0, y: 0, width: 320, height: 24))
+        field.stringValue = TerminalManager.launchCommand
+        field.placeholderString = "claude"
+        alert.accessoryView = field
+        alert.addButton(withTitle: "Save")
+        alert.addButton(withTitle: "Cancel")
+        alert.window.initialFirstResponder = field
+        guard alert.runModal() == .alertFirstButtonReturn else { return }
+        UserDefaults.standard.set(field.stringValue.trimmingCharacters(in: .whitespacesAndNewlines),
+                                  forKey: TerminalManager.launchCommandKey)
     }
 }

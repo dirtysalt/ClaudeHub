@@ -16,7 +16,10 @@ enum ITerm2 {
     static func open(_ session: ClaudeSession, done: @escaping (String?) -> Void) {
         DispatchQueue.global(qos: .userInitiated).async {
             let tty = liveTTY(of: session.id)
-            let command = "cd \(ClaudeSession.shellQuote(session.cwd)) && claude --resume \(ClaudeSession.shellQuote(session.id))"
+            // iTerm2's shell is interactive and has read ~/.shrc already.
+            let custom = TerminalManager.launchCommand
+            let claude = custom.isEmpty ? "claude" : custom
+            let command = "cd \(ClaudeSession.shellQuote(session.cwd)) && \(claude) --resume \(ClaudeSession.shellQuote(session.id))"
             let error = run(script(focusing: tty, orRunning: command))
             DispatchQueue.main.async { done(error) }
         }
