@@ -72,6 +72,7 @@ struct ClaudeHubApp: App {
     @StateObject private var git = GitStore()
     @StateObject private var cursorUsage = CursorUsageStore()
     @AppStorage(AppAppearance.key) private var appearance = AppAppearance.system.rawValue
+    @AppStorage("showChangesInSidebar") private var showChanges = false
     @AppStorage(SidebarOrder.key) private var sidebarOrder = SidebarOrder.fixed.rawValue
     @AppStorage(DarkTerminalScheme.key) private var darkScheme = DarkTerminalScheme.vsCode.rawValue
     @AppStorage(LightTerminalScheme.key) private var lightScheme = LightTerminalScheme.white.rawValue
@@ -159,6 +160,7 @@ struct ClaudeHubApp: App {
                     Text("Dark").tag(AppAppearance.dark.rawValue)
                 }
                 .onChange(of: appearance) { _, value in AppAppearance.apply(value) }
+                Toggle("Show Changes in Sidebar", isOn: $showChanges)
                 Picker("Sidebar Order", selection: $sidebarOrder) {
                     Text("Fixed (folders A–Z, sessions by start)").tag(SidebarOrder.fixed.rawValue)
                     Text("Recent Activity First").tag(SidebarOrder.recent.rawValue)

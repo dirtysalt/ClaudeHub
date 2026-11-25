@@ -39,6 +39,10 @@ struct ContentView: View {
     }
 
     @AppStorage(SidebarOrder.key) private var sidebarOrder = SidebarOrder.fixed.rawValue
+    /// The sidebar's Changes section, folded unless you open it.
+    @AppStorage("changesExpanded") private var changesExpanded = false
+    /// View → Show Changes in Sidebar. Off by default.
+    @AppStorage("showChangesInSidebar") private var showChanges = false
 
     private var filteredProjects: [ClaudeProject] {
         let fixed = SidebarOrder(rawValue: sidebarOrder) != .recent
@@ -484,39 +488,47 @@ struct ContentView: View {
                     .padding(.leading, CGFloat(row.depth) * 14)
             }
 
-            if !git.dirtyRepos.isEmpty {
+            if showChanges, !git.dirtyRepos.isEmpty {
                 // Not selectable: the sidebar's selection is a session, and a
                 // repository row painted in selection blue turns a list of file
                 // names into something you cannot read.
                 Group {
-                    Text("Changes")
-                        .font(.system(size: 11, weight: .semibold))
-                        .foregroundStyle(.secondary)
-                        .padding(.top, 8)
-                    ForEach(git.dirtyRepos) { repo in
-                        RepoRow(
-                            repo: repo,
-                            newSession: {
-                                tabs.openNewSession(cwd: repo.root)
-                                store.refreshSoon()
-                            },
-                            openInEditor: { openInVSCode(repo.root) },
-                            openFile: { path in
-                                openInVSCode((repo.root as NSString).appendingPathComponent(path))
-                            },
-                            showDiff: { tabs.openDiff(root: repo.root) },
-                            showRawDiff: {
-                                tabs.openScript(
-                                    "git -c color.ui=always status --short; echo; git -c color.ui=always diff HEAD",
-                                    title: "git diff · \(repo.name)",
-                                    cwd: repo.root
-                                )
-                            },
-                            reveal: {
-                                NSWorkspace.shared.selectFile(nil, inFileViewerRootedAtPath: repo.root)
-                            },
-                            canOpenInEditor: Self.vsCodeURL != nil
-                        )
+                    // Its own section below a rule, folded by default: most of
+                    // the time the sidebar is for sessions, and the changes
+                    // are a glance away when wanted.
+                    Divider()
+                        .padding(.top, 6)
+                    ChangesHeader(count: git.dirtyRepos.count,
+                                  files: git.dirtyRepos.reduce(0) { $0 + $1.pending },
+                                  isExpanded: changesExpanded) {
+                        withAnimation(.easeOut(duration: 0.18)) { changesExpanded.toggle() }
+                    }
+                    if changesExpanded {
+                        ForEach(git.dirtyRepos) { repo in
+                            RepoRow(
+                                repo: repo,
+                                newSession: {
+                                    tabs.openNewSession(cwd: repo.root)
+                                    store.refreshSoon()
+                                },
+                                openInEditor: { openInVSCode(repo.root) },
+                                openFile: { path in
+                                    openInVSCode((repo.root as NSString).appendingPathComponent(path))
+                                },
+                                showDiff: { tabs.openDiff(root: repo.root) },
+                                showRawDiff: {
+                                    tabs.openScript(
+                                        "git -c color.ui=always status --short; echo; git -c color.ui=always diff HEAD",
+                                        title: "git diff · \(repo.name)",
+                                        cwd: repo.root
+                                    )
+                                },
+                                reveal: {
+                                    NSWorkspace.shared.selectFile(nil, inFileViewerRootedAtPath: repo.root)
+                                },
+                                canOpenInEditor: Self.vsCodeURL != nil
+                            )
+                        }
                     }
                 }
                 .selectionDisabled()
@@ -1849,6 +1861,38 @@ private struct SignInLinkBar: View {
 
 /// One repository in the Changes section: what is in it, and the ways out of
 /// ClaudeHub to look at it properly.
+/// The fold for the sidebar's Changes section.
+private struct ChangesHeader: View {
+    let count: Int
+    let files: Int
+    let isExpanded: Bool
+    let toggle: () -> Void
+
+    var body: some View {
+        HStack(spacing: 5) {
+            Image(systemName: "chevron.right")
+                .font(.system(size: 9, weight: .semibold))
+                .foregroundStyle(.secondary)
+                .rotationEffect(.degrees(isExpanded ? 90 : 0))
+                .frame(width: 12, height: 14)
+            Image(systemName: "arrow.triangle.branch")
+                .font(.system(size: 10))
+                .foregroundStyle(.secondary)
+            Text("Changes")
+                .font(.system(size: 11, weight: .semibold))
+                .foregroundStyle(.secondary)
+            Text("\(count) repo\(count == 1 ? "" : "s") · \(files) file\(files == 1 ? "" : "s")")
+                .font(.system(size: 10).monospacedDigit())
+                .foregroundStyle(.tertiary)
+            Spacer()
+        }
+        .padding(.top, 2)
+        .contentShape(Rectangle())
+        .onTapGesture(perform: toggle)
+        .help(isExpanded ? "Fold the uncommitted changes" : "Show the uncommitted changes")
+    }
+}
+
 private struct RepoRow: View {
     let repo: RepoStatus
     /// Seeing what is lying around and starting a session about it are the same

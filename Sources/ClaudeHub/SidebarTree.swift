@@ -65,9 +65,11 @@ enum SidebarTree {
         guard top !== root || !root.children.isEmpty else { return [] }
 
         var rows: [SidebarRow] = []
-        if top === root {
-            // Nothing in common: every first-level directory is a top row.
-            for child in root.sortedChildren {
+        if top.project == nil {
+            // The folder everything shares (often just ~) is not a row of its
+            // own: its subfolders start the tree, labelled with their full
+            // path, so the sidebar is one level shallower.
+            for child in top.sortedChildren {
                 let (node, _) = compress(child, label: child.name)
                 emit(node, label: abbreviate(node.path), depth: 0, into: &rows, isCollapsed: isCollapsed)
             }
