@@ -1232,9 +1232,21 @@ final class TerminalManager: NSObject, ObservableObject {
             .bestMatch(from: [.darkAqua, .aqua]) == .darkAqua
     }
 
-    /// Matches the dark terminal background (#1E1E1E) / plain white in light mode.
+    /// The chosen scheme's background, dark or light.
     static var terminalBackground: NSColor {
-        isDarkMode ? NSColor(calibratedRed: 0.118, green: 0.118, blue: 0.118, alpha: 1) : .white
+        isDarkMode ? DarkTerminalScheme.current.background : LightTerminalScheme.current.background
+    }
+
+    /// View → Light Terminal Colors.
+    func setLightScheme(_ scheme: LightTerminalScheme) {
+        UserDefaults.standard.set(scheme.rawValue, forKey: LightTerminalScheme.key)
+        refreshThemes()
+    }
+
+    /// View → Dark Terminal Colors.
+    func setDarkScheme(_ scheme: DarkTerminalScheme) {
+        UserDefaults.standard.set(scheme.rawValue, forKey: DarkTerminalScheme.key)
+        refreshThemes()
     }
 
     private func applyTheme(to view: LocalProcessTerminalView) {
@@ -1244,15 +1256,21 @@ final class TerminalManager: NSObject, ObservableObject {
         // close to tell apart, so in the dark its chats get a brighter white
         // and lighter greys.
         let cursor = (view as? DroppableTerminalView)?.isCursorAgent == true
+        let scheme = DarkTerminalScheme.current
         view.nativeBackgroundColor = Self.terminalBackground
-        view.nativeForegroundColor = dark
-            ? NSColor(calibratedWhite: cursor ? 0.97 : 0.87, alpha: 1)
-            : NSColor(calibratedWhite: 0.13, alpha: 1)
         view.caretColor = NSColor(calibratedRed: 0.85, green: 0.35, blue: 0.16, alpha: 1)
         view.selectedTextBackgroundColor = NSColor.selectedTextBackgroundColor
-        view.installColors(dark
-                           ? (cursor ? Self.cursorDarkAnsiPalette : Self.darkAnsiPalette)
-                           : Self.lightAnsiPalette)
+        if !dark {
+            let light = LightTerminalScheme.current
+            view.nativeForegroundColor = light.foreground
+            view.installColors(light.palette)
+        } else if scheme == .vsCode {
+            view.nativeForegroundColor = NSColor(calibratedWhite: cursor ? 0.97 : 0.87, alpha: 1)
+            view.installColors(cursor ? Self.cursorDarkAnsiPalette : Self.darkAnsiPalette)
+        } else {
+            view.nativeForegroundColor = scheme.foreground
+            view.installColors(scheme.palette)
+        }
     }
 
     /// Re-theme cached terminals when the system appearance flips.
@@ -1263,27 +1281,6 @@ final class TerminalManager: NSObject, ObservableObject {
         }
         generation += 1
     }
-
-    /// ANSI 16-color palette tuned for a white background
-    /// (dim enough to stay readable on white, based on Tango/Terminal.app light).
-    private static let lightAnsiPalette: [SwiftTerm.Color] = [
-        rgb(0x00, 0x00, 0x00), // black
-        rgb(0xC2, 0x36, 0x21), // red
-        rgb(0x1A, 0x92, 0x1C), // green
-        rgb(0xA1, 0x6A, 0x00), // yellow -> dark amber
-        rgb(0x20, 0x53, 0xB3), // blue
-        rgb(0xA6, 0x38, 0xA6), // magenta
-        rgb(0x0E, 0x84, 0x8A), // cyan
-        rgb(0x8E, 0x8E, 0x93), // white -> light grey
-        rgb(0x5A, 0x5A, 0x5A), // bright black
-        rgb(0xE3, 0x4F, 0x3B), // bright red
-        rgb(0x2E, 0xA4, 0x30), // bright green
-        rgb(0xB8, 0x86, 0x0B), // bright yellow
-        rgb(0x3B, 0x74, 0xD9), // bright blue
-        rgb(0xC5, 0x4F, 0xC5), // bright magenta
-        rgb(0x17, 0xA2, 0xA9), // bright cyan
-        rgb(0x3C, 0x3C, 0x3C), // bright white -> near black (bold text on white)
-    ]
 
     /// ANSI 16-color palette for the dark background (VS Code dark terminal).
     private static let darkAnsiPalette: [SwiftTerm.Color] = [

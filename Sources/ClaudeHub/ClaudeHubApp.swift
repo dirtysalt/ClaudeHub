@@ -72,6 +72,8 @@ struct ClaudeHubApp: App {
     @StateObject private var git = GitStore()
     @StateObject private var cursorUsage = CursorUsageStore()
     @AppStorage(AppAppearance.key) private var appearance = AppAppearance.system.rawValue
+    @AppStorage(DarkTerminalScheme.key) private var darkScheme = DarkTerminalScheme.vsCode.rawValue
+    @AppStorage(LightTerminalScheme.key) private var lightScheme = LightTerminalScheme.white.rawValue
 
     init() {
         AppAppearance.apply(UserDefaults.standard.string(forKey: AppAppearance.key)
@@ -156,6 +158,22 @@ struct ClaudeHubApp: App {
                     Text("Dark").tag(AppAppearance.dark.rawValue)
                 }
                 .onChange(of: appearance) { _, value in AppAppearance.apply(value) }
+                Picker("Dark Terminal Colors", selection: $darkScheme) {
+                    ForEach(DarkTerminalScheme.allCases) { scheme in
+                        Text(scheme.name).tag(scheme.rawValue)
+                    }
+                }
+                .onChange(of: darkScheme) { _, value in
+                    TerminalManager.shared.setDarkScheme(DarkTerminalScheme(rawValue: value) ?? .vsCode)
+                }
+                Picker("Light Terminal Colors", selection: $lightScheme) {
+                    ForEach(LightTerminalScheme.allCases) { scheme in
+                        Text(scheme.name).tag(scheme.rawValue)
+                    }
+                }
+                .onChange(of: lightScheme) { _, value in
+                    TerminalManager.shared.setLightScheme(LightTerminalScheme(rawValue: value) ?? .white)
+                }
                 Divider()
             }
             CommandMenu("Claude") {

@@ -30,7 +30,12 @@ struct ContentView: View {
 
     /// Matches the SwiftTerm palette background in TerminalManager.
     private var terminalBackground: SwiftUI.Color {
-        colorScheme == .dark ? Color(red: 0.118, green: 0.118, blue: 0.118) : .white
+        // Read through `generation`, which a scheme change bumps, so the pane
+        // behind the terminal repaints along with it.
+        _ = terminalManager.generation
+        return Color(nsColor: colorScheme == .dark
+                     ? DarkTerminalScheme.current.background
+                     : LightTerminalScheme.current.background)
     }
 
     private var filteredProjects: [ClaudeProject] {
