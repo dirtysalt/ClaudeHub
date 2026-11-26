@@ -82,6 +82,87 @@ final class TabsModel: ObservableObject {
     /// Which tab each pane is showing.
     @Published private(set) var groupActive: [String] = []
 
+    private var saveSubscription: AnyCancellable?
+
+    init() {
+        restoreSavedTabs()
+        // Saved as it changes rather than on quit, so a crash or a forced
+        // restart still finds the tabs that were open.
+        saveSubscription = Publishers.CombineLatest($tabs, $activeTabID)
+            .debounce(for: .milliseconds(500), scheduler: RunLoop.main)
+            .sink { [weak self] _, _ in self?.saveTabs() }
+    }
+
+    // MARK: - Reopening tabs at launch
+
+    /// View → Reopen Tabs at Launch (on unless turned off).
+    static let reopenTabsKey = "reopenTabsAtLaunch"
+    private static let savedTabsKey = "savedTabs"
+
+    private struct SavedTab: Codable {
+        var title: String
+        var cwd: String
+        var sessionID: String
+        var isCursor: Bool
+        var profile: String?
+        var pinnedToSignedIn: Bool
+        var isActive: Bool
+    }
+
+    /// Only conversations come back: a shell, a diff or a login tab has
+    /// nothing to resume.
+    private func saveTabs() {
+        let saved: [SavedTab] = displayOrder.compactMap { id in
+            guard let tab = tabs.first(where: { $0.id == id }),
+                  tab.isChat, let session = tab.sessionID else { return nil }
+            return SavedTab(title: tab.chatName ?? tab.title, cwd: tab.cwd, sessionID: session,
+                            isCursor: tab.isCursor, profile: tab.profile,
+                            pinnedToSignedIn: tab.pinnedToSignedIn, isActive: id == activeTabID)
+        }
+        if let data = try? JSONEncoder().encode(saved) {
+            UserDefaults.standard.set(data, forKey: Self.savedTabsKey)
+        }
+    }
+
+    /// Tabs come back unstarted; each resumes its conversation when it is
+    /// first shown, so a long list does not launch every `claude` at once.
+    private func restoreSavedTabs() {
+        guard UserDefaults.standard.object(forKey: Self.reopenTabsKey) as? Bool ?? true,
+              let data = UserDefaults.standard.data(forKey: Self.savedTabsKey),
+              let saved = try? JSONDecoder().decode([SavedTab].self, from: data) else { return }
+        var active: String?
+        for entry in saved {
+            let tab: TerminalTab
+            if entry.isCursor {
+                tab = TerminalTab(id: "cursor-\(entry.sessionID)", title: entry.title, cwd: entry.cwd,
+                                  kind: .cursor(entry.sessionID), chatName: entry.title)
+            } else {
+                // A new session closed before Claude wrote anything has no
+                // conversation to resume.
+                guard Self.transcriptExists(entry.sessionID) else { continue }
+                let profile = entry.pinnedToSignedIn ? "signed-in" : entry.profile
+                tab = TerminalTab(id: Self.tabID(session: entry.sessionID, profile: profile),
+                                  title: entry.title, cwd: entry.cwd, kind: .resume(entry.sessionID),
+                                  profile: entry.profile, pinnedToSignedIn: entry.pinnedToSignedIn,
+                                  chatName: entry.title)
+            }
+            guard !tabs.contains(where: { $0.id == tab.id }) else { continue }
+            append(tab)
+            if entry.isActive { active = tab.id }
+        }
+        if let active { show(active) }
+    }
+
+    private static func transcriptExists(_ sessionID: String) -> Bool {
+        let projects = FileManager.default.homeDirectoryForCurrentUser
+            .appendingPathComponent(".claude/projects")
+        let folders = (try? FileManager.default.contentsOfDirectory(
+            at: projects, includingPropertiesForKeys: nil)) ?? []
+        return folders.contains {
+            FileManager.default.fileExists(atPath: $0.appendingPathComponent(sessionID + ".jsonl").path)
+        }
+    }
+
     var activeTab: TerminalTab? {
         tabs.first { $0.id == activeTabID }
     }
