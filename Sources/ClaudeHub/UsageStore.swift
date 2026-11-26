@@ -286,12 +286,31 @@ final class UsageStore: ObservableObject {
         // whichever account ClaudeHub is running sessions as.
 
         let claude = TerminalManager.shared.claudePath
+        // Claude Code writes a transcript for this session like any other; its
+        // id is picked here so the sidebar can leave it out.
+        let sessionID = Self.registerProbeSession()
         view.startProcess(
             executable: "/bin/zsh",
-            args: ["-l", "-c", "cd \(ClaudeSession.shellQuote(cwd)) && exec \(ClaudeSession.shellQuote(claude))"],
+            args: ["-l", "-c", "cd \(ClaudeSession.shellQuote(cwd)) && exec \(ClaudeSession.shellQuote(claude)) --session-id \(sessionID)"],
             environment: env.map { "\($0.key)=\($0.value)" },
             execName: nil
         )
+    }
+
+    /// The hidden sessions' ids, newest last, so the sidebar does not list
+    /// them. Kept across launches: their transcripts stay on disk.
+    static let probeSessionsKey = "usageProbeSessionIDs"
+
+    static var probeSessionIDs: Set<String> {
+        Set(UserDefaults.standard.stringArray(forKey: probeSessionsKey) ?? [])
+    }
+
+    private static func registerProbeSession() -> String {
+        let id = UUID().uuidString.lowercased()
+        var ids = UserDefaults.standard.stringArray(forKey: probeSessionsKey) ?? []
+        ids.append(id)
+        UserDefaults.standard.set(Array(ids.suffix(200)), forKey: probeSessionsKey)
+        return id
     }
 
     /// Polls until the session has drawn its input box, then asks.

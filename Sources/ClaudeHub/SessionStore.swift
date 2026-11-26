@@ -295,6 +295,8 @@ final class SessionStore: ObservableObject {
         let id = file.deletingPathExtension().lastPathComponent
         // Session transcripts are named by UUID; skip anything else (e.g. agent sidechains)
         guard UUID(uuidString: id) != nil else { return nil }
+        // The hidden session that reads /usage (see UsageStore).
+        guard !UsageStore.probeSessionIDs.contains(id) else { return nil }
 
         guard let attrs = try? file.resourceValues(forKeys: [.contentModificationDateKey, .creationDateKey, .fileSizeKey]),
               let mtime = attrs.contentModificationDate,
