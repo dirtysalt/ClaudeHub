@@ -7,22 +7,15 @@ struct QuickSwitcherView: View {
     @ObservedObject var tabs: TabsModel
     /// The sidebar's sessions (hidden ones left out).
     let sessions: [ClaudeSession]
-    /// Every git worktree of the sidebar's repositories; picking one starts
-    /// a new session in it.
-    var worktrees: [Worktree] = []
-    /// Starts a new session in a folder (and lets the sidebar know).
-    var onNewSession: (String) -> Void = { _ in }
     let dismiss: () -> Void
 
     private enum Item: Identifiable {
         case tab(TerminalTab)
-        case worktree(Worktree)
         case session(ClaudeSession)
 
         var id: String {
             switch self {
             case .tab(let tab): return "t:" + tab.id
-            case .worktree(let worktree): return "w:" + worktree.path
             case .session(let session): return "s:" + session.id
             }
         }
@@ -30,7 +23,6 @@ struct QuickSwitcherView: View {
         var title: String {
             switch self {
             case .tab(let tab): return tab.title
-            case .worktree(let worktree): return "New session in " + worktree.label
             case .session(let session): return session.title
             }
         }
@@ -38,7 +30,6 @@ struct QuickSwitcherView: View {
         var cwd: String {
             switch self {
             case .tab(let tab): return tab.cwd
-            case .worktree(let worktree): return worktree.path
             case .session(let session): return session.cwd
             }
         }
@@ -58,7 +49,7 @@ struct QuickSwitcherView: View {
         let rest = sessions
             .filter { !open.contains($0.id) }
             .sorted { $0.lastActivity > $1.lastActivity }
-        let items = ordered.map(Item.tab) + worktrees.map(Item.worktree) + rest.map(Item.session)
+        let items = ordered.map(Item.tab) + rest.map(Item.session)
         let words = query.lowercased().split(separator: " ").map(String.init)
         guard !words.isEmpty else { return items }
         return items.filter { item in
@@ -116,11 +107,6 @@ struct QuickSwitcherView: View {
             case .tab(let tab):
                 ActivityDot(activity: TerminalManager.shared.activity(of: tab.id), size: 6)
                     .frame(width: 14)
-            case .worktree:
-                Image(systemName: "arrow.triangle.branch")
-                    .font(.system(size: 10))
-                    .foregroundStyle(selected ? Color.white.opacity(0.8) : .secondary)
-                    .frame(width: 14)
             case .session(let session):
                 Image(systemName: session.isCursor ? "cursorarrow.rays" : "text.bubble")
                     .font(.system(size: 10))
@@ -146,9 +132,6 @@ struct QuickSwitcherView: View {
                     Text("current").font(.caption)
                         .foregroundStyle(selected ? Color.white.opacity(0.8) : .secondary)
                 }
-            case .worktree(let worktree):
-                Text(worktree.isMain ? "main checkout" : "worktree").font(.caption)
-                    .foregroundStyle(selected ? Color.white.opacity(0.8) : .secondary)
             case .session(let session):
                 Text(session.lastActivity, format: .relative(presentation: .named))
                     .font(.caption)
@@ -171,7 +154,6 @@ struct QuickSwitcherView: View {
         guard list.indices.contains(selection) else { return }
         switch list[selection] {
         case .tab(let tab): tabs.show(tab.id)
-        case .worktree(let worktree): onNewSession(worktree.path)
         case .session(let session): tabs.openSession(session)
         }
         dismiss()

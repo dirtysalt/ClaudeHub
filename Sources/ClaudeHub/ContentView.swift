@@ -367,8 +367,6 @@ struct ContentView: View {
             showMCPManager = true
         }
         .onReceive(NotificationCenter.default.publisher(for: .showQuickSwitcher)) { _ in
-            // A worktree made a moment ago should already be in the list.
-            git.scan()
             showQuickSwitcher = true
         }
         .onReceive(NotificationCenter.default.publisher(for: .findInTab)) { _ in
@@ -623,9 +621,7 @@ struct ContentView: View {
             QuickSwitcherView(
                 tabs: tabs,
                 sessions: store.projects.flatMap(\.sessions)
-                    .filter { !store.hiddenSessionIDs.contains($0.id) },
-                worktrees: git.allWorktrees,
-                onNewSession: { path in newSession(in: path) }
+                    .filter { !store.hiddenSessionIDs.contains($0.id) }
             ) { showQuickSwitcher = false }
         }
     }
@@ -1118,16 +1114,6 @@ struct ContentView: View {
             Button("New Cursor Chat in This Project") { newCursorChat(in: project.path) }
         }
         Button("New Terminal in This Project") { tabs.openNewTab(cwd: project.path) }
-        let worktrees = git.worktrees(forProjectAt: project.path).filter { $0.path != project.path }
-        if !worktrees.isEmpty {
-            Menu("New Session in Worktree") {
-                ForEach(worktrees) { worktree in
-                    Button(worktree.isMain ? "\(worktree.label) (main checkout)" : worktree.label) {
-                        newSession(in: worktree.path)
-                    }
-                }
-            }
-        }
         Divider()
         if Self.vsCodeURL != nil {
             Button("Open in VS Code") { openInVSCode(project.path) }
