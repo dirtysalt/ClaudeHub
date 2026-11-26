@@ -67,6 +67,9 @@ struct RepoStatus: Identifiable, Equatable {
 /// question the session list answers and nothing else on screen does.
 final class GitStore: ObservableObject {
     @Published private(set) var repos: [RepoStatus] = []
+    /// Repository root → its added worktrees (not the main checkout), so a
+    /// worktree with no session yet still has a row to start one from.
+    @Published private(set) var worktreesByRoot: [String: [String]] = [:]
     private var roots: [String] = []
     /// Project folder → the repositories in it, so the filesystem is walked
     /// once per folder and never on the main thread.
@@ -143,8 +146,14 @@ final class GitStore: ObservableObject {
 
         queue.async {
             let statuses = roots.compactMap { Self.read(root: $0, git: git) }
+            var worktrees: [String: [String]] = [:]
+            for root in roots {
+                let added = Self.worktrees(of: root, git: git)
+                if !added.isEmpty { worktrees[root] = added }
+            }
             DispatchQueue.main.async {
                 self.scanning = false
+                if worktrees != self.worktreesByRoot { self.worktreesByRoot = worktrees }
                 let sorted = statuses.sorted { ($0.pending, $1.name) > ($1.pending, $0.name) }
                 guard sorted != self.repos else { return }
                 self.repos = sorted
@@ -202,6 +211,16 @@ final class GitStore: ObservableObject {
             url.deleteLastPathComponent()
         }
         return nil
+    }
+
+    /// `git worktree list --porcelain`: blocks starting `worktree <path>`; the
+    /// first is the main checkout and is left out, as are folders that are gone.
+    static func worktrees(of root: String, git: String = binary) -> [String] {
+        guard let text = run(["worktree", "list", "--porcelain"], in: root, git: git) else { return [] }
+        let paths = text.split(separator: "\n")
+            .filter { $0.hasPrefix("worktree ") }
+            .map { String($0.dropFirst("worktree ".count)) }
+        return paths.dropFirst().filter { FileManager.default.fileExists(atPath: $0) }
     }
 
     private static func read(root: String, git: String) -> RepoStatus? {

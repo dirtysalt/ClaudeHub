@@ -62,6 +62,7 @@ struct ContentView: View {
                 : sessions)
             return copy.sessions.isEmpty ? nil : copy
         }
+        .appendingWorktrees(git.worktreesByRoot)
         guard !searchText.isEmpty else { return visible }
         let query = searchText.lowercased()
         return visible.compactMap { project in
@@ -2259,4 +2260,24 @@ enum SidebarOrder: String {
     /// Most recent activity first: what you just used rises to the top.
     case recent
     static let key = "sidebarOrder"
+}
+
+private extension Array where Element == ClaudeProject {
+    /// A repository listed in the sidebar shows its worktrees too, even ones
+    /// with no session yet, so the row's + starts the first one. They sit
+    /// under the repository in the tree when they live inside it
+    /// (`.claude/worktrees/…`).
+    func appendingWorktrees(_ worktreesByRoot: [String: [String]]) -> [ClaudeProject] {
+        let shown = Set(map(\.path))
+        var result = self
+        var added = Set<String>()
+        for project in self {
+            for path in worktreesByRoot[project.path] ?? []
+            where !shown.contains(path) && added.insert(path).inserted {
+                result.append(ClaudeProject(id: path, name: (path as NSString).lastPathComponent,
+                                            path: path, sessions: []))
+            }
+        }
+        return result
+    }
 }
